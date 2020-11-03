@@ -224,6 +224,39 @@ pub fn setters(input: TokenStream) -> TokenStream {
     gen.into()
 }
 
+#[proc_macro_derive(IncompleteGetters, attributes(get_incomplete, with_prefix, getset))]
+#[proc_macro_error]
+pub fn incomplete_getters(input: TokenStream) -> TokenStream {
+    // Parse the string representation
+    let ast: DeriveInput = syn::parse(input).expect_or_abort("Couldn't parse for getters");
+    let params = GenParams {
+        mode: GenMode::GetIncomplete,
+        global_attr: parse_global_attr(&ast.attrs, GenMode::GetIncomplete),
+    };
+
+    // Build the impl
+    let gen = produce(&ast, &params);
+    // Return the generated impl
+    gen.into()
+}
+
+#[proc_macro_derive(IncompleteSetters, attributes(set_incomplete, getset))]
+#[proc_macro_error]
+pub fn incomplete_setters(input: TokenStream) -> TokenStream {
+    // Parse the string representation
+    let ast: DeriveInput = syn::parse(input).expect_or_abort("Couldn't parse for setters");
+    let params = GenParams {
+        mode: GenMode::SetIncomplete,
+        global_attr: parse_global_attr(&ast.attrs, GenMode::SetIncomplete),
+    };
+
+    // Build the impl
+    let gen = produce(&ast, &params);
+
+    // Return the generated impl
+    gen.into()
+}
+
 fn parse_global_attr(attrs: &[syn::Attribute], mode: GenMode) -> Option<Meta> {
     attrs
         .iter()
