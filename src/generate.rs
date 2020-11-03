@@ -1,8 +1,9 @@
 use proc_macro2::TokenStream as TokenStream2;
 use proc_macro2::{Ident, Span};
 use proc_macro_error::{abort, ResultExt};
-use syn::{self, spanned::Spanned, Field, Lit, Meta, MetaNameValue, Visibility};
-
+use syn::{self, spanned::Spanned, Field, Lit, Meta,
+		  MetaNameValue, Visibility};
+use thiserror::Error;
 use self::GenMode::*;
 use super::parse_attr;
 
@@ -17,39 +18,102 @@ pub enum GenMode {
     GetCopy,
     Set,
     GetMut,
+    GetIncomplete,
+    SetIncomplete,
+}
+
+#[derive(Debug, Error)]
+pub enum GetSetError {
+    #[error("Get was called, but attribute was not set: {0:#?}")]
+    GetError(String),
+    #[error("Set was called twice for the attribute: {0:#?}")]
+    SetError(String),
 }
 
 impl GenMode {
+
     pub fn name(self) -> &'static str {
         match self {
             Get => "get",
             GetCopy => "get_copy",
             Set => "set",
             GetMut => "get_mut",
+            GetIncomplete => "get_incomplete",
+            SetIncomplete => "set_incomplete",
         }
     }
 
     pub fn prefix(self) -> &'static str {
         match self {
-            Get | GetCopy | GetMut => "",
-            Set => "set_",
+            Get | GetCopy | GetMut | GetIncomplete => "",
+            Set | SetIncomplete => "set_",
         }
     }
 
     pub fn suffix(self) -> &'static str {
         match self {
-            Get | GetCopy | Set => "",
+            Get | GetCopy | Set | GetIncomplete | SetIncomplete => "",
             GetMut => "_mut",
         }
     }
 
     fn is_get(self) -> bool {
         match self {
-            GenMode::Get | GenMode::GetCopy | GenMode::GetMut => true,
-            GenMode::Set => false,
+            GenMode::Get | GenMode::GetCopy | GenMode::GetMut | GenMode::GetIncomplete => true,
+            GenMode::Set | GenMode::SetIncomplete => false,
         }
     }
 }
+
+// https://stackoverflow.com/questions/55271857/how-can-i-get-the-t-from-an-optiont-when-using-syn/55277337
+// https://rust-syndication.github.io/rss/src/derive_builder_core/setter.rs.html#198
+fn extract_type_from_option(ty: &syn::Type) -> Option<&syn::Type> {
+    use syn::punctuated::Pair;
+    use syn::token::Colon2;
+    use syn::{GenericArgument, Path, PathArguments, PathSegment};
+
+    fn extract_type_path(ty: &syn::Type) -> Option<&Path> {
+        match *ty {
+            syn::Type::Path(ref typepath) if typepath.qself.is_none() => Some(&typepath.path),
+            _ => None,
+        }
+    }
+
+    // TODO store (with lazy static) the vec of string
+    // TODO maybe optimization, reverse the order of segments
+    fn extract_option_segment(path: &Path) -> Option<Pair<&PathSegment, &Colon2>> {
+        let idents_of_path = path
+            .segments
+            .iter()
+            .into_iter()
+            .fold(String::new(), |mut acc, v| {
+                acc.push_str(&v.ident.to_string());
+                acc.push('|');
+                acc
+            });
+        vec!["Option|", "std|option|Option|", "core|option|Option|"]
+            .into_iter()
+            .find(|s| &idents_of_path == *s)
+            .and_then(|_| path.segments.last()).map(Pair::End)
+    }
+
+    extract_type_path(ty)
+        .and_then(|path| extract_option_segment(path))
+        .and_then(|pair_path_segment| {
+            let type_params = &pair_path_segment.into_value().arguments;
+            // It should have only on angle-bracketed param ("<String>"):
+            match *type_params {
+                PathArguments::AngleBracketed(ref params) => params.args.first(),
+                _ => None,
+            }
+        })
+        .and_then(|generic_arg| match *generic_arg {
+            GenericArgument::Type(ref ty) => Some(ty),
+            _ => None,
+        })
+}
+
+
 
 pub fn parse_visibility(attr: Option<&Meta>, meta_name: &str) -> Option<Visibility> {
     match attr {
@@ -126,7 +190,10 @@ pub fn implement(field: &Field, params: &GenParams) -> TokenStream2 {
         ),
         Span::call_site(),
     );
-    let ty = field.ty.clone();
+    let ty = match params.mode {
+		GenMode::GetIncomplete | GenMode::SetIncomplete => extract_type_from_option(&field.ty).unwrap().clone(),
+ 		_ => field.ty.clone(),
+	};
 
     let doc = field.attrs.iter().filter(|v| {
         v.parse_meta()
@@ -178,6 +245,31 @@ pub fn implement(field: &Field, params: &GenParams) -> TokenStream2 {
                     #[inline(always)]
                     #visibility fn #fn_name(&mut self) -> &mut #ty {
                         &mut self.#field_name
+                    }
+                }
+            }
+            GenMode::GetIncomplete => {
+                quote! {
+                    #(#doc)*
+                    #[inline(always)]
+                    #visibility fn #fn_name(&self) -> Result<&#ty, GetSetError> {
+                        match self.#field_name {
+                            Some(x) => Ok(x),
+                            None => Err(GetSetError::SetError(#field_name))
+                        }
+                    }
+                }
+            }
+            GenMode::SetIncomplete => {
+                quote! {
+                    #(#doc)*
+                    #[inline(always)]
+                    #visibility fn #fn_name(&mut self, val: #ty) -> Result<&mut Self, GetSetError> {
+                        if self.#field_name.is_some() {
+                            return Err(GetSetError::GetError(#field_name));
+                        }
+                        self.#field_name = Some(val);
+                        Ok(self)
                     }
                 }
             }

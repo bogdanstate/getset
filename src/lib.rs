@@ -242,7 +242,9 @@ fn parse_attr(attr: &syn::Attribute, mode: GenMode) -> Option<Meta> {
                 if !(meta.path().is_ident("get")
                     || meta.path().is_ident("get_copy")
                     || meta.path().is_ident("get_mut")
-                    || meta.path().is_ident("set"))
+                    || meta.path().is_ident("set")
+                    || meta.path().is_ident("get_incomplete")
+                    || meta.path().is_ident("set_incomplete"))
                 {
                     abort!(meta.path().span(), "unknown setter or getter")
                 }
