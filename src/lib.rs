@@ -224,7 +224,7 @@ pub fn setters(input: TokenStream) -> TokenStream {
     gen.into()
 }
 
-#[proc_macro_derive(IncompleteGetters, attributes(get_incomplete, with_prefix, getset))]
+#[proc_macro_derive(IncompleteGetters, attributes(get_incomplete, getset))]
 #[proc_macro_error]
 pub fn incomplete_getters(input: TokenStream) -> TokenStream {
     // Parse the string representation

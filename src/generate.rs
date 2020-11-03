@@ -3,7 +3,6 @@ use proc_macro2::{Ident, Span};
 use proc_macro_error::{abort, ResultExt};
 use syn::{self, spanned::Spanned, Field, Lit, Meta,
 		  MetaNameValue, Visibility};
-use thiserror::Error;
 use self::GenMode::*;
 use super::parse_attr;
 
@@ -20,14 +19,6 @@ pub enum GenMode {
     GetMut,
     GetIncomplete,
     SetIncomplete,
-}
-
-#[derive(Debug, Error)]
-pub enum GetSetError {
-    #[error("Get was called, but attribute was not set: {0:#?}")]
-    GetError(String),
-    #[error("Set was called twice for the attribute: {0:#?}")]
-    SetError(String),
 }
 
 impl GenMode {
@@ -97,17 +88,17 @@ fn extract_type_from_option(ty: &syn::Type) -> Option<&syn::Type> {
             .and_then(|_| path.segments.last()).map(Pair::End)
     }
 
-    extract_type_path(ty)
-        .and_then(|path| extract_option_segment(path))
-        .and_then(|pair_path_segment| {
+    let tp = extract_type_path(&ty);
+    let tp2 = tp.and_then(|path| extract_option_segment(path));
+    let tp3 = tp2.and_then(|pair_path_segment| {
             let type_params = &pair_path_segment.into_value().arguments;
             // It should have only on angle-bracketed param ("<String>"):
             match *type_params {
                 PathArguments::AngleBracketed(ref params) => params.args.first(),
                 _ => None,
             }
-        })
-        .and_then(|generic_arg| match *generic_arg {
+        });
+    tp3.and_then(|generic_arg| match *generic_arg {
             GenericArgument::Type(ref ty) => Some(ty),
             _ => None,
         })
@@ -191,9 +182,14 @@ pub fn implement(field: &Field, params: &GenParams) -> TokenStream2 {
         Span::call_site(),
     );
     let ty = match params.mode {
-		GenMode::GetIncomplete | GenMode::SetIncomplete => extract_type_from_option(&field.ty).unwrap().clone(),
- 		_ => field.ty.clone(),
+		GenMode::GetIncomplete | GenMode::SetIncomplete => extract_type_from_option(&field.ty),
+ 		_ => Some(&field.ty),
 	};
+    if ty.is_none() {
+        return quote! {};
+    }
+    let ty = ty.unwrap();
+
 
     let doc = field.attrs.iter().filter(|v| {
         v.parse_meta()
@@ -209,6 +205,7 @@ pub fn implement(field: &Field, params: &GenParams) -> TokenStream2 {
         .or_else(|| params.global_attr.clone());
 
     let visibility = parse_visibility(attr.as_ref(), params.mode.name());
+
     match attr {
         Some(_) => match params.mode {
             GenMode::Get => {
@@ -254,8 +251,8 @@ pub fn implement(field: &Field, params: &GenParams) -> TokenStream2 {
                     #[inline(always)]
                     #visibility fn #fn_name(&self) -> Result<&#ty, GetSetError> {
                         match self.#field_name {
-                            Some(x) => Ok(x),
-                            None => Err(GetSetError::SetError(#field_name))
+                            Some(ref x) => Ok(x),
+                            None => Err(GetSetError::SetError(format!("{}", stringify!(#ty))))
                         }
                     }
                 }
@@ -266,7 +263,7 @@ pub fn implement(field: &Field, params: &GenParams) -> TokenStream2 {
                     #[inline(always)]
                     #visibility fn #fn_name(&mut self, val: #ty) -> Result<&mut Self, GetSetError> {
                         if self.#field_name.is_some() {
-                            return Err(GetSetError::GetError(#field_name));
+                            return Err(GetSetError::GetError(format!("{}", stringify!(#ty))));
                         }
                         self.#field_name = Some(val);
                         Ok(self)
