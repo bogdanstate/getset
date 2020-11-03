@@ -19,6 +19,7 @@ pub enum GenMode {
     GetMut,
     GetIncomplete,
     SetIncomplete,
+    GetMutIncomplete,
 }
 
 impl GenMode {
@@ -30,13 +31,14 @@ impl GenMode {
             Set => "set",
             GetMut => "get_mut",
             GetIncomplete => "get_incomplete",
+            GetMutIncomplete => "get_mut_incomplete",
             SetIncomplete => "set_incomplete",
         }
     }
 
     pub fn prefix(self) -> &'static str {
         match self {
-            Get | GetCopy | GetMut | GetIncomplete => "",
+            Get | GetCopy | GetMut | GetMutIncomplete | GetIncomplete => "",
             Set | SetIncomplete => "set_",
         }
     }
@@ -44,13 +46,17 @@ impl GenMode {
     pub fn suffix(self) -> &'static str {
         match self {
             Get | GetCopy | Set | GetIncomplete | SetIncomplete => "",
-            GetMut => "_mut",
+            GetMut | GetMutIncomplete => "_mut",
         }
     }
 
     fn is_get(self) -> bool {
         match self {
-            GenMode::Get | GenMode::GetCopy | GenMode::GetMut | GenMode::GetIncomplete => true,
+            GenMode::Get |
+                GenMode::GetCopy |
+                GenMode::GetMut |
+                GenMode::GetIncomplete |
+                GenMode::GetMutIncomplete => true,
             GenMode::Set | GenMode::SetIncomplete => false,
         }
     }
@@ -136,7 +142,7 @@ fn has_prefix_attr(f: &Field, params: &GenParams) -> bool {
         .iter()
         .filter_map(|v| parse_attr(v, params.mode))
         .filter(|meta| {
-            ["get", "get_copy"]
+            ["get", "get_copy", "get_incomplete", "get_mut_incomplete"]
                 .iter()
                 .any(|ident| meta.path().is_ident(ident))
         })
@@ -182,7 +188,7 @@ pub fn implement(field: &Field, params: &GenParams) -> TokenStream2 {
         Span::call_site(),
     );
     let ty = match params.mode {
-		GenMode::GetIncomplete | GenMode::SetIncomplete => extract_type_from_option(&field.ty),
+		GenMode::GetIncomplete | GenMode::SetIncomplete | GenMode::GetMutIncomplete => extract_type_from_option(&field.ty),
  		_ => Some(&field.ty),
 	};
     if ty.is_none() {
@@ -252,6 +258,18 @@ pub fn implement(field: &Field, params: &GenParams) -> TokenStream2 {
                     #visibility fn #fn_name(&self) -> Result<&#ty, GetSetError> {
                         match self.#field_name {
                             Some(ref x) => Ok(x),
+                            None => Err(GetSetError::SetError(format!("{}", stringify!(#ty))))
+                        }
+                    }
+                }
+            }
+            GenMode::GetMutIncomplete => {
+                quote! {
+                    #(#doc)*
+                    #[inline(always)]
+                    #visibility fn #fn_name(&mut self) -> Result<&mut #ty, GetSetError> {
+                        match self.#field_name {
+                            Some(ref mut x) => Ok(x),
                             None => Err(GetSetError::SetError(format!("{}", stringify!(#ty))))
                         }
                     }
