@@ -27,6 +27,7 @@ syn = {version = "1", features = ["full"]}
 proc-macro2 = { version = "1", default-features = false }
 proc-macro-error = "1.0"
 thiserror = "^1.0"
+type_macro_helpers = { path = "../type_macro_helpers" }
 
 [features]
 log_syntax = []
